@@ -1,0 +1,7 @@
+/home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build/CMakeFiles/LedController.dir
+/home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build/CMakeFiles/edit_cache.dir
+/home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build/CMakeFiles/rebuild_cache.dir
+/home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build/CMakeFiles/list_install_components.dir
+/home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build/CMakeFiles/install.dir
+/home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build/CMakeFiles/install/local.dir
+/home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build/CMakeFiles/install/strip.dir
