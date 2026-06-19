@@ -32,8 +32,37 @@ class DroneROSNode(Node):
         led_topic = LED_TOPIC.format(drone_id)
         self._led_pub = self.create_publisher(String, led_topic, 10)
 
+        # High-speed telemetry channel setup
+        self._telemetry_pub = self.create_publisher(String, f'/drone_{drone_id}/telemetry', 10)
+        self._target_telemetry_lock = threading.Lock()
+        self._target_telemetry = None
+
+        if drone_id > 0:
+            target_topic = f'/drone_{drone_id-1}/telemetry'
+            self._telemetry_sub = self.create_subscription(
+                String, target_topic, self._telemetry_cb, 10
+            )
+
         self._spin_thread: Optional[threading.Thread] = None
         self._spinning = False
+
+    def _telemetry_cb(self, msg: String) -> None:
+        try:
+            import json
+            data = json.loads(msg.data)
+            with self._target_telemetry_lock:
+                self._target_telemetry = data
+        except Exception:
+            pass
+
+    def publish_telemetry(self, value: str) -> None:
+        msg = String()
+        msg.data = value
+        self._telemetry_pub.publish(msg)
+
+    def target_telemetry(self) -> Optional[dict]:
+        with self._target_telemetry_lock:
+            return self._target_telemetry
 
     def _image_cb(self, msg: Image) -> None:
         try:

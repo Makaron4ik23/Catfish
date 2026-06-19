@@ -26,6 +26,64 @@ async def run():
             print("Drone discovered!")
             break
 
+    # ── High-Speed Telemetry background tracking ─────────────────
+    curr_n, curr_e, curr_d = 0.0, 0.0, 0.0
+    curr_vn, curr_ve, curr_vd = 0.0, 0.0, 0.0
+    curr_yaw = 0.0
+    curr_abs_alt = 0.0
+
+    async def track_telemetry_loop():
+        nonlocal curr_n, curr_e, curr_d, curr_vn, curr_ve, curr_vd, curr_yaw, curr_abs_alt
+        async def fetch_heading():
+            nonlocal curr_yaw
+            try:
+                async for hdg in drone.telemetry.heading():
+                    curr_yaw = hdg.heading_deg
+            except asyncio.CancelledError:
+                pass
+        async def fetch_abs_alt():
+            nonlocal curr_abs_alt
+            try:
+                async for pos in drone.telemetry.position():
+                    curr_abs_alt = pos.absolute_altitude_m
+            except asyncio.CancelledError:
+                pass
+        async def fetch_pos_vel():
+            nonlocal curr_n, curr_e, curr_d, curr_vn, curr_ve, curr_vd
+            try:
+                async for pv in drone.telemetry.position_velocity_ned():
+                    curr_n = pv.position.north_m
+                    curr_e = pv.position.east_m
+                    curr_d = pv.position.down_m
+                    curr_vn = pv.velocity.north_m_s
+                    curr_ve = pv.velocity.east_m_s
+                    curr_vd = pv.velocity.down_m_s
+            except asyncio.CancelledError:
+                pass
+        async def publish_loop():
+            try:
+                while True:
+                    drone_leds.publish_telemetry(curr_n, curr_e, curr_d, curr_vn, curr_ve, curr_vd, curr_yaw, curr_abs_alt)
+                    await asyncio.sleep(0.05)
+            except asyncio.CancelledError:
+                pass
+
+        tasks = [
+            asyncio.create_task(fetch_heading()),
+            asyncio.create_task(fetch_abs_alt()),
+            asyncio.create_task(fetch_pos_vel()),
+            asyncio.create_task(publish_loop())
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            for t in tasks:
+                t.cancel()
+
+    telemetry_task = asyncio.create_task(track_telemetry_loop())
+
     # Disable ALL battery failsafes for SITL simulation
     for name, val in [("COM_LOW_BAT_ACT", 0)]:
         try:
@@ -48,12 +106,12 @@ async def run():
 
     print("-- Arming")
     await drone.action.arm()
-    await asyncio.sleep(8)  # longer stabilization for slow SITL
+    await asyncio.sleep(3)  # fast arming
 
     print(f"-- Taking off to {takeoff_alt_m:.2f}m above platform")
     await drone.action.set_takeoff_altitude(takeoff_alt_m)
     await drone.action.takeoff()
-    await asyncio.sleep(15) # Let it reach a completely stable hover (longer for slow SITL)
+    await asyncio.sleep(4) # fast takeoff sleep
 
 # =========================================================================
     # DYNAMIC TELEMETRY CAPTURE (FIXED)
@@ -64,15 +122,10 @@ async def run():
     # 1. Takeoff target altitude is takeoff_alt_m
     hover_absolute_alt = takeoff_alt_m
         
-    # 2. Grab the current absolute heading (Yaw reference) by averaging multiple readings to bypass MAVSDK's stale buffer.
-    hover_yaw_deg = 0.0
-    count = 0
-    async for heading in drone.telemetry.heading():
-        hover_yaw_deg += heading.heading_deg
-        count += 1
-        if count >= 10:
-            break
-    hover_yaw_deg /= count
+    # 2. Grab the current absolute heading (Yaw reference) from our running background tracker.
+    while curr_yaw == 0.0:
+        await asyncio.sleep(0.1)
+    hover_yaw_deg = curr_yaw
         
     hover_yaw_rad = math.radians(hover_yaw_deg)
     print(f"Captured Base - Altitude: {hover_absolute_alt:.2f}m, Heading: {hover_yaw_deg:.2f}°")
@@ -99,77 +152,46 @@ async def run():
         print(f"Starting offboard mode failed: {error._result.result}")
         print("-- Disarming")
         await drone.action.disarm()
+        telemetry_task.cancel()
         return
 
     # ==========================
-    # CORE CAMERA TRAINING PATTERN
+    # OFFICIAL MISSION PATH
     # ==========================
 
-    # --- Phase 1: Move on path 2 meters ---
-    print("-> Moving forward 2 meters on path (LED ON -> FOLLOW)")
+    # --- Start -> Checkpoint 1 (10m forward) ---
+    print("-> Moving to Checkpoint 1 (10m forward). LED ON -> FOLLOW")
     drone_leds.led_on()
-    await drone.offboard.set_position_ned(get_ned_position(2.0, 0.0, 0.0))
-    await asyncio.sleep(10)  # Give followers more time to lock on
+    await drone.offboard.set_position_ned(get_ned_position(10.0, 0.0, 0.0))
+    await asyncio.sleep(15)  # Time to travel 10 meters
 
-    # --- Sub-routine 1: Cross & Altitude Pattern ---
-    print("-> Pattern 1: Perpendicular left 2m")
-    await drone.offboard.set_position_ned(get_ned_position(2.0, 2.0, 0.0))
-    await asyncio.sleep(7)
-
-    print("-> Pattern 1: Perpendicular right 2m")
-    await drone.offboard.set_position_ned(get_ned_position(2.0, -2.0, 0.0))
-    await asyncio.sleep(9)
-
-    print("-> Pattern 1: Return to center line")
-    await drone.offboard.set_position_ned(get_ned_position(2.0, 0.0, 0.0))
-    await asyncio.sleep(7)
-
-    print("-> Pattern 1: Climb up +2 meters")
-    await drone.offboard.set_position_ned(get_ned_position(2.0, 0.0, 2.0))
-    await asyncio.sleep(7)
-
-    print("-> Pattern 1: Climb down -2 meters")
-    await drone.offboard.set_position_ned(get_ned_position(2.0, 0.0, 0.0))
-    await asyncio.sleep(7)
-
-    print("-> ** HOLD Phase ** (Manual 1Hz BLINK -> HOLD)")
-    for _ in range(15):  # longer hold for reliable protocol detection
+    # --- Checkpoint 1 HOLD ---
+    print("-> ** Checkpoint 1 HOLD ** (Manual 5Hz BLINK -> HOLD)")
+    for _ in range(25):  # 5 seconds hold
         drone_leds.led_on()
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.1)
         drone_leds.led_off()
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.1)
 
-    # --- Phase 2: Progress down path to +5 meters total ---
-    print("-> Moving forward an additional 3 meters (Total: 5m down path) (LED ON -> FOLLOW)")
+    # --- Checkpoint 1 -> Checkpoint 2 (20m forward, 5m right) ---
+    print("-> Moving to Checkpoint 2 (20m forward, 5m right). LED ON -> FOLLOW")
     drone_leds.led_on()
-    await drone.offboard.set_position_ned(get_ned_position(5.0, 0.0, 0.0))
-    await asyncio.sleep(10)
+    await drone.offboard.set_position_ned(get_ned_position(20.0, 5.0, 0.0))
+    await asyncio.sleep(15)
 
-    # --- Sub-routine 2: Repeat Pattern ---
-    print("-> Pattern 2: Perpendicular left 2m")
-    await drone.offboard.set_position_ned(get_ned_position(5.0, 2.0, 0.0))
-    await asyncio.sleep(7)
+    # --- Checkpoint 2 HOLD ---
+    print("-> ** Checkpoint 2 HOLD ** (Manual 5Hz BLINK -> HOLD)")
+    for _ in range(25):
+        drone_leds.led_on()
+        await asyncio.sleep(0.1)
+        drone_leds.led_off()
+        await asyncio.sleep(0.1)
 
-    print("-> Pattern 2: Perpendicular right 2m")
-    await drone.offboard.set_position_ned(get_ned_position(5.0, -2.0, 0.0))
-    await asyncio.sleep(9)
-
-    print("-> Pattern 2: Return to center line")
-    await drone.offboard.set_position_ned(get_ned_position(5.0, 0.0, 0.0))
-    await asyncio.sleep(7)
-
-    print("-> Pattern 2: Climb up +2 meters")
-    await drone.offboard.set_position_ned(get_ned_position(5.0, 0.0, 2.0))
-    await asyncio.sleep(7)
-
-    print("-> Pattern 2: Climb down -2 meters")
-    await drone.offboard.set_position_ned(get_ned_position(5.0, 0.0, 0.0))
-    await asyncio.sleep(7)
-
-    # --- Phase 3: Return & Land ---
-    print("-> Returning backwards to start position (0,0)")
-    await drone.offboard.set_position_ned(get_ned_position(0.0, 0.0, 0.0))
-    await asyncio.sleep(12)  # longer return for chain to keep up
+    # --- Checkpoint 2 -> Target B (30m forward, 5m right) ---
+    print("-> Moving to Target B (30m forward, 5m right). LED ON -> FOLLOW")
+    drone_leds.led_on()
+    await drone.offboard.set_position_ned(get_ned_position(30.0, 5.0, 0.0))
+    await asyncio.sleep(15)
 
     print("-- Stopping Offboard Mode to allow landing action")
     try:
@@ -180,6 +202,7 @@ async def run():
     print("-- Landing (LED OFF -> FINISH/LOST)")
     drone_leds.led_off()
     await drone.action.land()
+    telemetry_task.cancel()
     
 if __name__ == "__main__":
     asyncio.run(run())

@@ -41,7 +41,7 @@ FOLLOWER_IDS = [1, 2, 3]
 
 # Flight
 TARGET_ABS_ALT = 42.0   # Target absolute altitude (MSL) for the entire swarm
-TAKEOFF_WAIT_S = 18      # stabilisation time after takeoff (longer for slow SITL)
+TAKEOFF_WAIT_S = 2      # stabilisation time after takeoff (longer for slow SITL)
 
 # Camera
 FRAME_W, FRAME_H = 640, 480
@@ -73,7 +73,7 @@ TARGET_W = 18.0
 # ── Controller Gains ───────────────────────────────────────────────
 KP_YAW     = 40.0      # yaw correction gain (tighter tracking)
 KD_YAW     = 4.0       # yaw derivative gain (more damping)
-KP_FORWARD = 2.2       # forward speed gain (smoother chain follow)
+KP_FORWARD = 5.0       # forward speed gain (smoother chain follow)
 KD_FORWARD = 0.8       # forward speed derivative gain (dampen chain oscillation)
 KP_ALT     = 1.5       # climb rate gain
 ALPHA_D    = 0.4       # exponential smoothing factor for derivative
@@ -262,7 +262,12 @@ def _camera_spin(drones, stop_evt):
 #  Per-drone follower coroutine
 # ══════════════════════════════════════════════════════════════════════
 
-async def follower(drone, drone_id, shutdown):
+async def follower(drone, drone_id, shutdown, start_delay=0.0):
+    _log = lambda msg: print(f"[Drone {drone_id}] {msg}")
+    if start_delay > 0.0:
+        _log(f"Staggered startup: waiting {start_delay:.1f}s before arming...")
+        await asyncio.sleep(start_delay)
+
     state = State.TAKEOFF
     last_det_t = time.time()
     last_dir   = 1          # +1 = LED was to the right, −1 = left
@@ -285,16 +290,111 @@ async def follower(drone, drone_id, shutdown):
     prev_err_x = 0.0
     prev_err_x_diff = 0.0
 
-    _log = lambda msg: print(f"[Drone {drone_id}] {msg}")
+    last_vel_log_t = 0.0
 
     # ── Pitch Telemetry background subscription ────────────────────
     current_pitch_deg = 0.0
     async def track_pitch():
         nonlocal current_pitch_deg
-        async for att in drone._sys.telemetry.attitude_euler():
-            current_pitch_deg = att.pitch_deg
+        try:
+            async for att in drone._sys.telemetry.attitude_euler():
+                current_pitch_deg = att.pitch_deg
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            _log(f"Telemetry pitch stream lost: {exc}")
+            shutdown.set()
 
     pitch_task = asyncio.create_task(track_pitch())
+
+    # ── High-Speed Telemetry background tracking ─────────────────
+    curr_n, curr_e, curr_d = 0.0, 0.0, 0.0
+    curr_vn, curr_ve, curr_vd = 0.0, 0.0, 0.0
+    curr_yaw = 0.0
+    curr_abs_alt = 0.0
+
+    async def track_telemetry_loop():
+        nonlocal curr_n, curr_e, curr_d, curr_vn, curr_ve, curr_vd, curr_yaw, curr_abs_alt
+        async def fetch_heading():
+            nonlocal curr_yaw
+            try:
+                async for hdg in drone._sys.telemetry.heading():
+                    curr_yaw = hdg.heading_deg
+            except asyncio.CancelledError:
+                pass
+        async def fetch_abs_alt():
+            nonlocal curr_abs_alt
+            try:
+                async for pos in drone._sys.telemetry.position():
+                    curr_abs_alt = pos.absolute_altitude_m
+            except asyncio.CancelledError:
+                pass
+        async def fetch_pos_vel():
+            nonlocal curr_n, curr_e, curr_d, curr_vn, curr_ve, curr_vd
+            try:
+                async for pv in drone._sys.telemetry.position_velocity_ned():
+                    curr_n = pv.position.north_m
+                    curr_e = pv.position.east_m
+                    curr_d = pv.position.down_m
+                    curr_vn = pv.velocity.north_m_s
+                    curr_ve = pv.velocity.east_m_s
+                    curr_vd = pv.velocity.down_m_s
+            except asyncio.CancelledError:
+                pass
+
+        tasks = [
+            asyncio.create_task(fetch_heading()),
+            asyncio.create_task(fetch_abs_alt()),
+            asyncio.create_task(fetch_pos_vel())
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            for t in tasks:
+                t.cancel()
+
+    # ── Velocity control interception wrapper ───────────────────
+    async def send_velocity(vn_cmd, ve_cmd, vert_spd_cmd, yaw_deg_cmd):
+        target_data = drone.get_target_telemetry()
+        if target_data is not None and state != State.LAND:
+            if protocol_cmd == "HOLD" or state == State.HOLD:
+                vn_cmd, ve_cmd, vert_spd_cmd = 0.0, 0.0, 0.0
+                yaw_deg_cmd = curr_yaw
+            else:
+                target_vd = target_data["vd"]
+                target_abs_alt = target_data["abs_alt"]
+
+                # Regulate absolute altitude (with feedforward) using telemetry
+                err_alt = target_abs_alt - curr_abs_alt
+                vert_spd_cmd = target_vd - 1.5 * err_alt
+                vert_spd_cmd = float(np.clip(vert_spd_cmd, -MAX_VERT, MAX_VERT))
+
+                # Use OpenCV's visual commands for horizontal movement and yaw.
+                # Telemetry velocity can be added as a small feedforward boost for lag reduction.
+                # vn_cmd and ve_cmd already contain the OpenCV PD-controller output.
+                target_vn = target_data["vn"]
+                target_ve = target_data["ve"]
+                vn_cmd += target_vn * 0.3  # 30% velocity feedforward
+                ve_cmd += target_ve * 0.3
+
+                # Clamp horizontal velocity to MAX_FWD
+                v_mag = math.hypot(vn_cmd, ve_cmd)
+                if v_mag > MAX_FWD:
+                    vn_cmd = (vn_cmd / v_mag) * MAX_FWD
+                    ve_cmd = (ve_cmd / v_mag) * MAX_FWD
+
+                # Stateful collision overrides
+                if collision_state == "CRITICAL_AVOID":
+                    rad_heading = math.radians(curr_yaw)
+                    vn_cmd = -1.5 * math.cos(rad_heading)
+                    ve_cmd = -1.5 * math.sin(rad_heading)
+                elif collision_state == "COLLISION_AVOID":
+                    vn_cmd *= 0.2
+                    ve_cmd *= 0.2
+
+        await drone.set_velocity(vn_cmd, ve_cmd, vert_spd_cmd, yaw_deg=yaw_deg_cmd)
 
     # ── TAKEOFF ────────────────────────────────────────────────────
     # Get starting ground absolute altitude to compute relative takeoff altitude
@@ -304,6 +404,13 @@ async def follower(drone, drone_id, shutdown):
         break
     takeoff_alt = TARGET_ABS_ALT - ground_abs_alt
     _log(f"Ground absolute altitude: {ground_abs_alt:.2f}m. Target relative takeoff: {takeoff_alt:.2f}m")
+
+    # Start telemetry tracking task
+    telemetry_task = asyncio.create_task(track_telemetry_loop())
+
+    # Wait until we get first valid telemetry readings
+    while curr_abs_alt == 0.0:
+        await asyncio.sleep(0.1)
 
     _log("Arming …")
     await drone.arm()
@@ -323,6 +430,8 @@ async def follower(drone, drone_id, shutdown):
     # ── MAIN LOOP ──────────────────────────────────────────────────
     try:
         while not shutdown.is_set() and state != State.LAND:
+            # Publish local telemetry
+            drone.publish_telemetry(curr_n, curr_e, curr_d, curr_vn, curr_ve, curr_vd, curr_yaw, curr_abs_alt)
             frame = drone.camera_frame()
 
             if frame is not None:
@@ -379,7 +488,7 @@ async def follower(drone, drone_id, shutdown):
                             _log("Blinking detected → HOLD")
                             state = State.HOLD
                         heading = await drone.heading()
-                        await drone.set_velocity(0, 0, 0, yaw_deg=heading)
+                        await send_velocity(0, 0, 0, heading)
                         prev_fwd_speed = 0.0
 
                         # periodic debug
@@ -471,7 +580,7 @@ async def follower(drone, drone_id, shutdown):
                                  f"err_x={err_x:+.2f} err_d={err_d:+.2f} "
                                  f"fwd={fwd_speed:+.1f} lat={lat_speed:+.1f} yaw_adj={yaw_adj:+.1f}")
 
-                        await drone.set_velocity(vn, ve, vert_spd, yaw_deg=tgt_hdg)
+                        await send_velocity(vn, ve, vert_spd, tgt_hdg)
                 else:
                     # ---- LED lost in this frame ----
                     dt_lost = time.time() - last_det_t
@@ -483,7 +592,7 @@ async def follower(drone, drone_id, shutdown):
                         if state != State.HOLD:
                             _log("Blinking detected (off cycle) → HOLD")
                             state = State.HOLD
-                        await drone.set_velocity(0, 0, 0, yaw_deg=heading)
+                        await send_velocity(0, 0, 0, heading)
                         last_det_t = time.time() # Reset timeout during HOLD mode
                     else:
                         # Check obstacle density even if LED is lost
@@ -503,12 +612,12 @@ async def follower(drone, drone_id, shutdown):
                             _log(f"{lock_label}  dt={dt_lost:.1f}s  state={state.value} obs_density={obs_density:.3f}")
 
                         if not initial_lock:
-                            # Startup mode: wait pointing forward in SAFE_HOVER for up to 45 seconds
-                            if dt_lost < 45.0:
+                            # Startup mode: wait pointing forward in SAFE_HOVER for up to 90 seconds
+                            if dt_lost < 90.0:
                                 if state != State.SAFE_HOVER:
                                     _log("Waiting for leader's first detection... SAFE_HOVER")
                                     state = State.SAFE_HOVER
-                                await drone.set_velocity(0, 0, 0, yaw_deg=heading)
+                                await send_velocity(0, 0, 0, heading)
                             else:
                                 _log("Initial connection timeout → LAND")
                                 state = State.LAND
@@ -523,9 +632,9 @@ async def follower(drone, drone_id, shutdown):
                                     rad = math.radians(heading)
                                     vn = -lat_speed * math.sin(rad)
                                     ve = lat_speed * math.cos(rad)
-                                    await drone.set_velocity(vn, ve, 0, yaw_deg=heading)
+                                    await send_velocity(vn, ve, 0, heading)
                                 else:
-                                    await drone.set_velocity(0, 0, 0, yaw_deg=heading)
+                                    await send_velocity(0, 0, 0, heading)
 
                             elif dt_lost < LAND_TIMEOUT:
                                 if state != State.YAW_SEARCH:
@@ -538,9 +647,9 @@ async def follower(drone, drone_id, shutdown):
                                     rad = math.radians(heading)
                                     vn = -lat_speed * math.sin(rad)
                                     ve = lat_speed * math.cos(rad)
-                                    await drone.set_velocity(vn, ve, 0, yaw_deg=search_hdg)
+                                    await send_velocity(vn, ve, 0, search_hdg)
                                 else:
-                                    await drone.set_velocity(0, 0, 0, yaw_deg=search_hdg)
+                                    await send_velocity(0, 0, 0, search_hdg)
                             else:
                                 _log("Timeout → LAND")
                                 state = State.LAND
@@ -555,6 +664,7 @@ async def follower(drone, drone_id, shutdown):
 
     finally:
         pitch_task.cancel()
+        telemetry_task.cancel()
 
     # ── LANDING ────────────────────────────────────────────────────
     _log("Landing …")
@@ -619,8 +729,8 @@ async def main():
 
     # ── launch follower coroutines ────────────────────────────────
     tasks = [
-        asyncio.create_task(follower(d, d.drone_id, stop_async))
-        for d in connected_drones
+        asyncio.create_task(follower(d, d.drone_id, stop_async, start_delay=float(i * 3.0)))
+        for i, d in enumerate(connected_drones)
     ]
     connected_ids = [d.drone_id for d in connected_drones]
     print(f"Follower missions launched for: {connected_ids}")

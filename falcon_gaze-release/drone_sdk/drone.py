@@ -251,6 +251,27 @@ class Drone:
         async for hdg in self._sys.telemetry.heading():
             return hdg.heading_deg
 
+    # ── Telemetry Communication ─────────────────────────────────────
+
+    def publish_telemetry(self, n: float, e: float, d: float, vn: float, ve: float, vd: float, yaw: float, abs_alt: float) -> None:
+        self._ensure_ros()
+        import json
+        data = {
+            "n": float(n),
+            "e": float(e),
+            "d": float(d),
+            "vn": float(vn),
+            "ve": float(ve),
+            "vd": float(vd),
+            "yaw": float(yaw),
+            "abs_alt": float(abs_alt)
+        }
+        self._ros.publish_telemetry(json.dumps(data))
+
+    def get_target_telemetry(self) -> Optional[dict]:
+        self._ensure_ros()
+        return self._ros.target_telemetry()
+
     # ── LED control ─────────────────────────────────────────────────
 
     def set_leds(self, mask: str) -> None:
