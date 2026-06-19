@@ -84,10 +84,25 @@ class Drone:
             )
 
         self._connected = True
-        try:
-            await self._sys.param.set_param_int("COM_LOW_BAT_ACT", 0)
-        except Exception as e:
-            print(f"[Drone {self.drone_id}] Warning: failed to disable battery failsafe: {e}")
+        # Disable ALL battery failsafes for SITL simulation
+        _bat_params = [
+            ("COM_LOW_BAT_ACT", 0),    # no action on low battery
+        ]
+        _bat_float_params = [
+            ("BAT_LOW_THR", 0.02),      # lower low-battery threshold to 2%
+            ("BAT_CRIT_THR", 0.01),     # lower critical threshold to 1%
+            ("BAT_EMERGEN_THR", 0.005), # lower emergency threshold to 0.5%
+        ]
+        for name, val in _bat_params:
+            try:
+                await self._sys.param.set_param_int(name, val)
+            except Exception as e:
+                print(f"[Drone {self.drone_id}] Warning: set {name}={val} failed: {e}")
+        for name, val in _bat_float_params:
+            try:
+                await self._sys.param.set_param_float(name, val)
+            except Exception as e:
+                print(f"[Drone {self.drone_id}] Warning: set {name}={val} failed: {e}")
 
 
     async def _wait_connected(self) -> None:

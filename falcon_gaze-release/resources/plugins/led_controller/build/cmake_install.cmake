@@ -1,4 +1,4 @@
-# Install script for directory: /home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller
+# Install script for directory: /mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -49,7 +49,7 @@ if("x${CMAKE_INSTALL_COMPONENT}x" STREQUAL "xUnspecifiedx" OR NOT CMAKE_INSTALL_
          FILE "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/lib/libLedController.so"
          RPATH "")
   endif()
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/lib" TYPE SHARED_LIBRARY FILES "/home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build/libLedController.so")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/lib" TYPE SHARED_LIBRARY FILES "/mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller/build/libLedController.so")
   if(EXISTS "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/lib/libLedController.so" AND
      NOT IS_SYMLINK "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/lib/libLedController.so")
     if(CMAKE_INSTALL_DO_STRIP)
@@ -69,5 +69,5 @@ endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
-file(WRITE "/home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build/${CMAKE_INSTALL_MANIFEST}"
+file(WRITE "/mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller/build/${CMAKE_INSTALL_MANIFEST}"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")

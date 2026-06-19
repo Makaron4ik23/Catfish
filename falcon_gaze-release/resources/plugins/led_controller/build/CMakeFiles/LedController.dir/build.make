@@ -53,10 +53,10 @@ RM = /usr/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller
+CMAKE_SOURCE_DIR = /mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build
+CMAKE_BINARY_DIR = /mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller/build
 
 # Include any dependencies generated for this target.
 include CMakeFiles/LedController.dir/depend.make
@@ -72,16 +72,16 @@ include CMakeFiles/LedController.dir/flags.make
 CMakeFiles/LedController.dir/LedController.cc.o: CMakeFiles/LedController.dir/flags.make
 CMakeFiles/LedController.dir/LedController.cc.o: ../LedController.cc
 CMakeFiles/LedController.dir/LedController.cc.o: CMakeFiles/LedController.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/LedController.dir/LedController.cc.o"
-	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/LedController.dir/LedController.cc.o -MF CMakeFiles/LedController.dir/LedController.cc.o.d -o CMakeFiles/LedController.dir/LedController.cc.o -c /home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/LedController.cc
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/LedController.dir/LedController.cc.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/LedController.dir/LedController.cc.o -MF CMakeFiles/LedController.dir/LedController.cc.o.d -o CMakeFiles/LedController.dir/LedController.cc.o -c /mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller/LedController.cc
 
 CMakeFiles/LedController.dir/LedController.cc.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/LedController.dir/LedController.cc.i"
-	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/LedController.cc > CMakeFiles/LedController.dir/LedController.cc.i
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller/LedController.cc > CMakeFiles/LedController.dir/LedController.cc.i
 
 CMakeFiles/LedController.dir/LedController.cc.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/LedController.dir/LedController.cc.s"
-	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/LedController.cc -o CMakeFiles/LedController.dir/LedController.cc.s
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller/LedController.cc -o CMakeFiles/LedController.dir/LedController.cc.s
 
 # Object files for target LedController
 LedController_OBJECTS = \
@@ -92,9 +92,9 @@ LedController_EXTERNAL_OBJECTS =
 
 libLedController.so: CMakeFiles/LedController.dir/LedController.cc.o
 libLedController.so: CMakeFiles/LedController.dir/build.make
-libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-sim8.so.8.12.0
-libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-fuel_tools9.so.9.1.1
-libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-gui8.so.8.4.0
+libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-sim7.so.7.9.0
+libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-fuel_tools8.so.8.2.0
+libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-gui7.so.7.2.2
 libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-plugin2-loader.so.2.0.4
 libLedController.so: /usr/lib/x86_64-linux-gnu/libQt5QuickControls2.so.5.15.3
 libLedController.so: /usr/lib/x86_64-linux-gnu/libQt5Quick.so.5.15.3
@@ -104,9 +104,11 @@ libLedController.so: /usr/lib/x86_64-linux-gnu/libQt5Network.so.5.15.3
 libLedController.so: /usr/lib/x86_64-linux-gnu/libQt5Widgets.so.5.15.3
 libLedController.so: /usr/lib/x86_64-linux-gnu/libQt5Gui.so.5.15.3
 libLedController.so: /usr/lib/x86_64-linux-gnu/libQt5Core.so.5.15.3
-libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-physics7.so.7.7.0
+libLedController.so: /usr/lib/x86_64-linux-gnu/libtinyxml2.so
+libLedController.so: /usr/lib/x86_64-linux-gnu/libtinyxml2.so
+libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-physics6.so.6.7.0
 libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-plugin2.so.2.0.4
-libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-rendering8.so.8.2.3
+libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-rendering7.so.7.5.0
 libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-common5-profiler.so.5.8.0
 libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-common5-events.so.5.8.0
 libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-common5-av.so.5.8.0
@@ -125,19 +127,17 @@ libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-common5-testing.so.5.8.0
 libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-common5-geospatial.so.5.8.0
 libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-common5-graphics.so.5.8.0
 libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-common5.so.5.8.0
-libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-transport13-parameters.so.13.5.0
-libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-transport13.so.13.5.0
+libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-transport12-parameters.so.12.2.2
+libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-transport12.so.12.2.2
 libLedController.so: /usr/lib/x86_64-linux-gnu/libuuid.so
 libLedController.so: /usr/lib/x86_64-linux-gnu/libuuid.so
-libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-msgs10.so.10.3.2
-libLedController.so: /usr/lib/x86_64-linux-gnu/libtinyxml2.so
-libLedController.so: /usr/lib/x86_64-linux-gnu/libtinyxml2.so
-libLedController.so: /usr/lib/x86_64-linux-gnu/libsdformat14.so.14.9.0
+libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-msgs9.so.9.5.1
+libLedController.so: /usr/lib/x86_64-linux-gnu/libsdformat13.so.13.9.0
 libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-math7.so.7.6.0
 libLedController.so: /usr/lib/x86_64-linux-gnu/libgz-utils2.so.2.2.1
 libLedController.so: /usr/lib/x86_64-linux-gnu/libprotobuf.so
 libLedController.so: CMakeFiles/LedController.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --bold --progress-dir=/home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking CXX shared library libLedController.so"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --bold --progress-dir=/mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking CXX shared library libLedController.so"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/LedController.dir/link.txt --verbose=$(VERBOSE)
 
 # Rule to build all files generated by this target.
@@ -149,6 +149,6 @@ CMakeFiles/LedController.dir/clean:
 .PHONY : CMakeFiles/LedController.dir/clean
 
 CMakeFiles/LedController.dir/depend:
-	cd /home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller /home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller /home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build /home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build /home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build/CMakeFiles/LedController.dir/DependInfo.cmake --color=$(COLOR)
+	cd /mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller /mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller /mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller/build /mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller/build /mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller/build/CMakeFiles/LedController.dir/DependInfo.cmake --color=$(COLOR)
 .PHONY : CMakeFiles/LedController.dir/depend
 

@@ -55,7 +55,7 @@ def generate_launch_description():
         for n, (idx, x, y, z) in enumerate(followers):
                 actions.append(
                         TimerAction(
-                                period=6.0 + n * 5.0,
+                                period=20.0 + n * 10.0,  # generous delay for slow SITL
                                 actions=[
                                         follower_instanse(
                                                 idx, x, y, z

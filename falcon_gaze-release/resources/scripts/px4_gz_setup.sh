@@ -14,12 +14,16 @@ export GZ_SIM_SYSTEM_PLUGIN_PATH=$GZ_SIM_SYSTEM_PLUGIN_PATH:$PX4_DIR/Tools/simul
 export GZ_SIM_SYSTEM_PLUGIN_PATH=$GZ_SIM_SYSTEM_PLUGIN_PATH:$PX4_DIR/build/px4_sitl_default/build_gazebo
 
 # === WSL GPU rendering ===
+export DISPLAY=:0
+export WAYLAND_DISPLAY=wayland-0
+export XDG_RUNTIME_DIR=/mnt/wslg/runtime-dir
+export PULSE_SERVER=/mnt/wslg/PulseServer
 # WSLg OpenGL goes through Mesa D3D12. Prefer NVIDIA on hybrid GPU systems.
 export MESA_D3D12_DEFAULT_ADAPTER_NAME="${MESA_D3D12_DEFAULT_ADAPTER_NAME:-NVIDIA}"
-unset LIBGL_ALWAYS_SOFTWARE
+export LIBGL_ALWAYS_SOFTWARE=1
 
 # Vulkan currently falls back to llvmpipe in this WSL setup; use OGRE2/OpenGL.
-export GZ_RENDER_ENGINE=ogre2
+export GZ_RENDER_ENGINE=ogre
 
 # === Optional but useful ===
 export PX4_DIR=$PX4_DIR

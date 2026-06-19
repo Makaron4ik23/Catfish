@@ -41,7 +41,7 @@ FOLLOWER_IDS = [1, 2, 3]
 
 # Flight
 TARGET_ABS_ALT = 42.0   # Target absolute altitude (MSL) for the entire swarm
-TAKEOFF_WAIT_S = 12      # stabilisation time after takeoff
+TAKEOFF_WAIT_S = 18      # stabilisation time after takeoff (longer for slow SITL)
 
 # Camera
 FRAME_W, FRAME_H = 640, 480
@@ -71,12 +71,12 @@ TARGET_AREA = 220.0   # Area-based target (used when stagger is active)
 TARGET_W = 18.0
 
 # ── Controller Gains ───────────────────────────────────────────────
-KP_YAW     = 35.0      # yaw correction gain
-KD_YAW     = 2.0       # yaw derivative gain
-KP_FORWARD = 3.0       # forward speed gain
-KD_FORWARD = 0.5       # forward speed derivative gain
+KP_YAW     = 40.0      # yaw correction gain (tighter tracking)
+KD_YAW     = 4.0       # yaw derivative gain (more damping)
+KP_FORWARD = 2.2       # forward speed gain (smoother chain follow)
+KD_FORWARD = 0.8       # forward speed derivative gain (dampen chain oscillation)
 KP_ALT     = 1.5       # climb rate gain
-ALPHA_D    = 0.3       # exponential smoothing factor for derivative
+ALPHA_D    = 0.4       # exponential smoothing factor for derivative
 
 # ── Collision Avoidance Thresholds ─────────────────────────────────
 COLLISION_W_ENTER = 23.0
@@ -85,13 +85,13 @@ CRITICAL_W_ENTER  = 28.0
 CRITICAL_W_EXIT   = 25.0
 
 # ── Speed clamps ───────────────────────────────────────────────────
-MAX_FWD  = 3.0   # m/s
+MAX_FWD  = 2.5   # m/s (reduced to prevent chain overshoot/"slingshot")
 MAX_VERT = 1.0   # m/s
 
 # ── Timing ─────────────────────────────────────────────────────────
-HOVER_TIMEOUT  = 3.0    # seconds of no detection before yaw-search
+HOVER_TIMEOUT  = 5.0    # seconds of no detection before yaw-search (more tolerance for chain)
 SEARCH_RATE    = 8.0    # deg/s yaw rotation in search mode
-LAND_TIMEOUT   = 20.0   # seconds before auto-land
+LAND_TIMEOUT   = 30.0   # seconds before auto-land (more patience in chain)
 CTRL_DT        = 0.05   # 20 Hz control loop
 LOG_INTERVAL   = 2.0    # seconds between periodic debug prints
 
@@ -396,7 +396,7 @@ async def follower(drone, drone_id, shutdown):
                         collision_state = update_collision_state(collision_state, w)
 
                         # ── Stagger Shift ──────────────────────────────────────────
-                        stagger_offset = -35 if (drone_id % 2 == 1) else 35
+                        stagger_offset = -20 if (drone_id % 2 == 1) else 20  # tighter formation
                         CX_target = CX + stagger_offset
                         err_x = (cx - CX_target) / CX
 
@@ -446,9 +446,9 @@ async def follower(drone, drone_id, shutdown):
                             fwd_speed = -1.5  # Bypass rate-limiter for immediate safety backing
                         elif collision_state == "COLLISION_AVOID":
                             fwd_speed = min(fwd_speed, 0.3)
-                            fwd_speed = _rate_limit(fwd_speed, prev_fwd_speed, max_accel=3.0, dt=CTRL_DT)
+                            fwd_speed = _rate_limit(fwd_speed, prev_fwd_speed, max_accel=2.0, dt=CTRL_DT)
                         else:
-                            fwd_speed = _rate_limit(fwd_speed, prev_fwd_speed, max_accel=3.0, dt=CTRL_DT)
+                            fwd_speed = _rate_limit(fwd_speed, prev_fwd_speed, max_accel=2.0, dt=CTRL_DT)
 
                         fwd_speed = float(np.clip(fwd_speed, -MAX_FWD, MAX_FWD))
                         prev_fwd_speed = fwd_speed
@@ -615,7 +615,7 @@ async def main():
     cam = threading.Thread(target=_camera_spin,
                            args=(connected_drones, stop_thread), daemon=True)
     cam.start()
-    await asyncio.sleep(2.0)       # wait for ROS bridges
+    await asyncio.sleep(4.0)       # wait for ROS bridges (longer for slow SITL)
 
     # ── launch follower coroutines ────────────────────────────────
     tasks = [

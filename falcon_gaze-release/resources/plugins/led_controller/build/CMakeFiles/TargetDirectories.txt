@@ -1,7 +1,7 @@
-/home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build/CMakeFiles/LedController.dir
-/home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build/CMakeFiles/edit_cache.dir
-/home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build/CMakeFiles/rebuild_cache.dir
-/home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build/CMakeFiles/list_install_components.dir
-/home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build/CMakeFiles/install.dir
-/home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build/CMakeFiles/install/local.dir
-/home/user-pc/PX4-Autopilot/Tools/simulation/gz/plugins/led_controller/build/CMakeFiles/install/strip.dir
+/mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller/build/CMakeFiles/LedController.dir
+/mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller/build/CMakeFiles/edit_cache.dir
+/mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller/build/CMakeFiles/rebuild_cache.dir
+/mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller/build/CMakeFiles/list_install_components.dir
+/mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller/build/CMakeFiles/install.dir
+/mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller/build/CMakeFiles/install/local.dir
+/mnt/c/Users/User/Desktop/Catfish/falcon_gaze-release/resources/plugins/led_controller/build/CMakeFiles/install/strip.dir
