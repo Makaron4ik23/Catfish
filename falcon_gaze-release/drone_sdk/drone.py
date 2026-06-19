@@ -13,7 +13,7 @@ from .ros_node import DroneROSNode
 
 MAVSDK_UDP_PORT_BASE = 14540
 MAVSDK_GRPC_PORT_BASE = 50051
-CONNECT_TIMEOUT = 20.0
+CONNECT_TIMEOUT = 30.0
 
 
 class PositionNED(NamedTuple):
@@ -84,6 +84,11 @@ class Drone:
             )
 
         self._connected = True
+        try:
+            await self._sys.param.set_param_int("COM_LOW_BAT_ACT", 0)
+        except Exception as e:
+            print(f"[Drone {self.drone_id}] Warning: failed to disable battery failsafe: {e}")
+
 
     async def _wait_connected(self) -> None:
         async for state in self._sys.core.connection_state():

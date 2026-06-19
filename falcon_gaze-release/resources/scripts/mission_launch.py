@@ -26,6 +26,11 @@ async def run():
             print("Drone discovered!")
             break
 
+    try:
+        await drone.param.set_param_int("COM_LOW_BAT_ACT", 0)
+    except Exception:
+        pass
+
     # Get ground absolute altitude to compute relative takeoff altitude
     ground_abs_alt = None
     async for pos in drone.telemetry.position():

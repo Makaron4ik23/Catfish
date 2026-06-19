@@ -3,14 +3,17 @@
 Follower mission — vision-based leader tracking for the GENERA hackathon.
 
 Each follower drone uses its front-facing camera to detect the green LED
-beacon on the drone ahead and follows it with a P-controller.
+beacon on the drone ahead and follows it with a PD-controller.
 
 State machine:
     TAKEOFF → FOLLOW ⇄ SAFE_HOVER → YAW_SEARCH → LAND
 
-Usage:
-    source /opt/ros/humble/setup.bash
-    python3 examples/follower_mission.py
+Additionally integrates:
+- Stateful hysteresis anti-collision with direct CRITICAL_AVOID jumps.
+- Lateral stagger offset to prevent occlusion on sharp turns.
+- Masked central obstacle avoidance with dynamic direction selection.
+- Telemetry pitch-tilt visual compensation.
+- Solidity shape filtering on contours to reject sun/tree reflections.
 """
 
 import asyncio
@@ -44,25 +47,42 @@ TAKEOFF_WAIT_S = 12      # stabilisation time after takeoff
 FRAME_W, FRAME_H = 640, 480
 CX, CY = FRAME_W / 2, FRAME_H / 2      # frame centre
 
-# HSV thresholds for the green LED
-# Narrow hue window + high saturation to reject grass/ground
-HSV_LO = np.array([40, 150, 150])
-HSV_HI = np.array([80, 255, 255])
+# HSV thresholds for the green LED (calibrated and expanded for robust tracking)
+HSV_LO = np.array([40, 140, 160])
+HSV_HI = np.array([72, 255, 255])
 
-# Minimum contour area (pixels²) — reject noise below this
+# Minimum/maximum contour area (pixels²)
 MIN_AREA = 8.0
+MAX_ALLOWED_AREA = 950.0
 
 # Blob shape filters
-MIN_BLOB_DIM  = 3     # pixels — reject contours thinner than this
+MIN_BLOB_DIM  = 3     # pixels
+MAX_BLOB_DIM  = 48    # pixels (reject big structures like trees/houses, leaves headroom for w~28)
 MAX_ASPECT    = 4.0   # w/h ratio — reject long horizontal strips (grass edges)
 
-# Target LED bounding-box width (px) at desired following distance (~3-4 m)
+
+
+# Solidity filter limits (for contours >= SOLIDITY_MIN_AREA)
+SOLIDITY_MIN_AREA = 50.0
+SOLIDITY_THRESHOLD = 0.82
+
+# Target LED parameters for distance estimation
+TARGET_AREA = 220.0   # Area-based target (used when stagger is active)
 TARGET_W = 18.0
 
-# ── P-controller gains ─────────────────────────────────────────────
-KP_YAW     = 25.0      # deg heading adjustment per normalised x-error
-KP_FORWARD = 2.5       # m/s per normalised width-error
-KP_ALT     = 1.0       # m/s per normalised y-error
+# ── Controller Gains ───────────────────────────────────────────────
+KP_YAW     = 35.0      # yaw correction gain
+KD_YAW     = 2.0       # yaw derivative gain
+KP_FORWARD = 3.0       # forward speed gain
+KD_FORWARD = 0.5       # forward speed derivative gain
+KP_ALT     = 1.5       # climb rate gain
+ALPHA_D    = 0.3       # exponential smoothing factor for derivative
+
+# ── Collision Avoidance Thresholds ─────────────────────────────────
+COLLISION_W_ENTER = 23.0
+COLLISION_W_EXIT  = 20.0
+CRITICAL_W_ENTER  = 28.0
+CRITICAL_W_EXIT   = 25.0
 
 # ── Speed clamps ───────────────────────────────────────────────────
 MAX_FWD  = 3.0   # m/s
@@ -70,7 +90,7 @@ MAX_VERT = 1.0   # m/s
 
 # ── Timing ─────────────────────────────────────────────────────────
 HOVER_TIMEOUT  = 3.0    # seconds of no detection before yaw-search
-SEARCH_RATE    = 8.0    # deg/s yaw rotation in search mode (reduced to avoid motion blur)
+SEARCH_RATE    = 8.0    # deg/s yaw rotation in search mode
 LAND_TIMEOUT   = 20.0   # seconds before auto-land
 CTRL_DT        = 0.05   # 20 Hz control loop
 LOG_INTERVAL   = 2.0    # seconds between periodic debug prints
@@ -90,10 +110,74 @@ class State(Enum):
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  CV detector
+#  Pure helper functions
 # ══════════════════════════════════════════════════════════════════════
 
-_morph_kernel = np.ones((3, 3), np.uint8)
+def update_collision_state(curr_state, w):
+    """Update and return collision safety state using hysteresis."""
+    if w > CRITICAL_W_ENTER:
+        return "CRITICAL_AVOID"
+    elif curr_state == "CRITICAL_AVOID" and w < CRITICAL_W_EXIT:
+        return "COLLISION_AVOID"
+    elif curr_state != "CRITICAL_AVOID" and w > COLLISION_W_ENTER:
+        return "COLLISION_AVOID"
+    elif curr_state == "COLLISION_AVOID" and w < COLLISION_W_EXIT:
+        return "NORMAL"
+    return curr_state
+
+
+def _rate_limit(target, prev, max_accel, dt):
+    """Limit acceleration to smooth out command jumps."""
+    max_step = max_accel * dt
+    return float(np.clip(target, prev - max_step, prev + max_step))
+
+
+def update_pd_filter(err, prev_err, prev_err_diff, alpha, dt):
+    """Compute and smooth derivative error component."""
+    raw_diff = (err - prev_err) / dt
+    smoothed_diff = alpha * raw_diff + (1 - alpha) * prev_err_diff
+    return smoothed_diff
+
+
+def compute_obstacle_density(frame, led_bbox=None, box_size=160, pitch_comp=0.0):
+    """Compute edge density in the center ROI, masking the target LED and ground."""
+    cx0, cy0 = FRAME_W // 2 - box_size // 2, FRAME_H // 2 - box_size // 2
+    roi = frame[cy0:cy0+box_size, cx0:cx0+box_size].copy()
+
+    # 1. Mask out region around LED target if visible (scaled to block out the drone body)
+    if led_bbox is not None:
+        lx, ly, lw, lh = led_bbox
+        pad_x = int(2.5 * lw)
+        pad_y = int(1.2 * lh)
+        mx0 = max(0, lx - pad_x - cx0)
+        my0 = max(0, ly - pad_y - cy0)
+        mx1 = min(box_size, lx + lw + pad_x - cx0)
+        my1 = min(box_size, ly + lh + pad_y - cy0)
+        if mx1 > mx0 and my1 > my0:
+            roi[my0:my1, mx0:mx1] = 0
+
+    # 2. Mask out the ground (anything below the pitch-compensated horizon line)
+    # Horizon is at Y = CY + pitch_comp. We add a safety margin of +15px.
+    horizon_rel_y = int(CY + pitch_comp + 15 - cy0)
+    if 0 <= horizon_rel_y < box_size:
+        roi[horizon_rel_y:, :] = 0
+    elif horizon_rel_y < 0:
+        roi[:, :] = 0
+
+    edges = cv2.Canny(cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY), 50, 150)
+    return float(np.count_nonzero(edges) / edges.size)
+
+
+def obstacle_avoid_direction(frame, box_size=160):
+    """Determine slide direction based on left/right split ROI edge density."""
+    cx0, cy0 = FRAME_W // 2 - box_size // 2, FRAME_H // 2 - box_size // 2
+    roi = frame[cy0:cy0+box_size, cx0:cx0+box_size]
+    edges = cv2.Canny(cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY), 50, 150)
+    left_density = np.count_nonzero(edges[:, :box_size // 2])
+    right_density = np.count_nonzero(edges[:, box_size // 2:])
+    # Avoid towards the side with lower density
+    return -1 if left_density > right_density else 1
+
 
 def detect_led(frame, state=None):
     """Return (cx, cy, w, h, area) of the largest green blob, or None."""
@@ -101,9 +185,9 @@ def detect_led(frame, state=None):
     
     # Adaptive thresholds during active search to handle motion blur smearing
     if state == State.YAW_SEARCH:
-        lo = np.array([40, 100, 100])  # loosen saturation/value
-        hi = np.array([80, 255, 255])
-        max_aspect = 8.0               # allow horizontally elongated blobs due to motion blur
+        lo = np.array([42, 110, 160])  # loosen saturation/value
+        hi = np.array([68, 255, 255])
+        max_aspect = 8.0               # allow elongated blobs due to motion blur
     else:
         lo = HSV_LO
         hi = HSV_HI
@@ -112,6 +196,7 @@ def detect_led(frame, state=None):
     mask = cv2.inRange(hsv, lo, hi)
 
     # morphological cleanup
+    _morph_kernel = np.ones((3, 3), np.uint8)
     mask = cv2.erode(mask, _morph_kernel, iterations=1)
     mask = cv2.dilate(mask, _morph_kernel, iterations=2)
 
@@ -120,18 +205,30 @@ def detect_led(frame, state=None):
     best, best_area = None, 0.0
     for c in contours:
         a = cv2.contourArea(c)
-        if a < MIN_AREA:
+        if a < MIN_AREA or a > MAX_ALLOWED_AREA:
             continue
         bx, by, bw, bh = cv2.boundingRect(c)
-        # reject tiny blobs
+        # reject tiny or large blobs (trees, structures)
         if bw < MIN_BLOB_DIM or bh < MIN_BLOB_DIM:
+            continue
+        if bw > MAX_BLOB_DIM or bh > MAX_BLOB_DIM:
             continue
         # reject elongated horizontal strips (grass edges)
         aspect = bw / max(bh, 1)
         if aspect > max_aspect:
             continue
+            
+        # Solidity shape filtering (ignore on tiny contours to prevent noise edge errors)
+        if a >= SOLIDITY_MIN_AREA:
+            hull = cv2.convexHull(c)
+            hull_area = cv2.contourArea(hull)
+            solidity = a / hull_area if hull_area > 0 else 0.0
+            if solidity < SOLIDITY_THRESHOLD:
+                continue
+                
         if a > best_area:
             best, best_area = c, a
+
 
     if best is None:
         return None
@@ -178,7 +275,26 @@ async def follower(drone, drone_id, shutdown):
     last_cx, last_cy = None, None
     last_det_time = 0.0
 
+    # Stateful safety parameters
+    collision_state = "NORMAL"
+    prev_fwd_speed = 0.0
+
+    # PD controller memory
+    prev_err_d = 0.0
+    prev_err_d_diff = 0.0
+    prev_err_x = 0.0
+    prev_err_x_diff = 0.0
+
     _log = lambda msg: print(f"[Drone {drone_id}] {msg}")
+
+    # ── Pitch Telemetry background subscription ────────────────────
+    current_pitch_deg = 0.0
+    async def track_pitch():
+        nonlocal current_pitch_deg
+        async for att in drone._sys.telemetry.attitude_euler():
+            current_pitch_deg = att.pitch_deg
+
+    pitch_task = asyncio.create_task(track_pitch())
 
     # ── TAKEOFF ────────────────────────────────────────────────────
     # Get starting ground absolute altitude to compute relative takeoff altitude
@@ -201,6 +317,8 @@ async def follower(drone, drone_id, shutdown):
     _log("Offboard + LED active.  State → FOLLOW")
     state = State.FOLLOW
     last_det_t = time.time()
+    initial_lock = False
+
 
     # ── MAIN LOOP ──────────────────────────────────────────────────
     try:
@@ -253,6 +371,8 @@ async def follower(drone, drone_id, shutdown):
                     cx, cy, w, h, area = det
                     last_det_t = time.time()
                     last_dir = 1 if cx > CX else -1
+                    initial_lock = True
+
 
                     if protocol_cmd == "HOLD":
                         if state != State.HOLD:
@@ -260,6 +380,7 @@ async def follower(drone, drone_id, shutdown):
                             state = State.HOLD
                         heading = await drone.heading()
                         await drone.set_velocity(0, 0, 0, yaw_deg=heading)
+                        prev_fwd_speed = 0.0
 
                         # periodic debug
                         now = time.time()
@@ -271,73 +392,159 @@ async def follower(drone, drone_id, shutdown):
                             _log("Solid LED → FOLLOW")
                             state = State.FOLLOW
 
-                        # normalised errors (-1 … +1)
-                        err_x = (cx - CX) / CX
-                        err_y = (cy - CY) / CY
-                        err_d = (TARGET_W - w) / TARGET_W   # >0 → too far
+                        # ── Stateful Hysteresis Collision Update ───────────────────
+                        collision_state = update_collision_state(collision_state, w)
 
-                        # controller outputs
-                        yaw_adj   = KP_YAW * err_x
-                        fwd_speed = float(np.clip(KP_FORWARD * err_d,
-                                                  -MAX_FWD, MAX_FWD))
-                        vert_spd  = float(np.clip(KP_ALT * err_y,
-                                                  -MAX_VERT, MAX_VERT))
+                        # ── Stagger Shift ──────────────────────────────────────────
+                        stagger_offset = -35 if (drone_id % 2 == 1) else 35
+                        CX_target = CX + stagger_offset
+                        err_x = (cx - CX_target) / CX
 
+                        # ── Pitch-Tilt Camera Compensation ─────────────────────────
+                        pitch_comp = (current_pitch_deg / 45.0) * FRAME_H
+                        pitch_comp = float(np.clip(pitch_comp, -120.0, 120.0))
+                        err_y = (cy - pitch_comp - CY) / CY
+
+                        # ── Distance error based on area under stagger ──────────────
+                        err_d = (TARGET_AREA - area) / TARGET_AREA
+
+                        # ── PD Controller & Rate limiting ──────────────────────────
+                        err_d_diff = update_pd_filter(err_d, prev_err_d, prev_err_d_diff, ALPHA_D, CTRL_DT)
+                        err_x_diff = update_pd_filter(err_x, prev_err_x, prev_err_x_diff, ALPHA_D, CTRL_DT)
+
+                        # Speed outputs
+                        fwd_speed = KP_FORWARD * err_d + KD_FORWARD * err_d_diff
+                        yaw_adj   = KP_YAW * err_x + KD_YAW * err_x_diff
+                        vert_spd  = float(np.clip(KP_ALT * err_y, -MAX_VERT, MAX_VERT))
+
+                        # Save errors for next PD cycle
+                        prev_err_d = err_d
+                        prev_err_d_diff = err_d_diff
+                        prev_err_x = err_x
+                        prev_err_x_diff = err_x_diff
+
+                        # ── Obstacle Avoidance Proxy ───────────────────────────────
+                        led_bbox = (cx - w // 2, cy - h // 2, w, h)
+                        obs_density = compute_obstacle_density(frame, led_bbox=led_bbox, box_size=160, pitch_comp=pitch_comp)
+                        
+                        lat_speed = 0.0
+                        avoiding = False
+                        if obs_density > 0.02:
+                            avoid_dir = obstacle_avoid_direction(frame, box_size=160)
+                            lat_speed = 0.6 * avoid_dir
+                            # Scale down forward speed proportionally
+                            density_factor = np.clip((obs_density - 0.02) / 0.06, 0.0, 1.0)
+                            fwd_speed = fwd_speed * (1.0 - 0.6 * density_factor)
+                            avoiding = True
+
+                        # ── Tilt Speed Guard ───────────────────────────────────────
+                        if abs(err_y) > 0.6:
+                            fwd_speed = fwd_speed * 0.5
+
+                        # ── Apply stateful speed overrides ─────────────────────────
+                        if collision_state == "CRITICAL_AVOID":
+                            fwd_speed = -1.5  # Bypass rate-limiter for immediate safety backing
+                        elif collision_state == "COLLISION_AVOID":
+                            fwd_speed = min(fwd_speed, 0.3)
+                            fwd_speed = _rate_limit(fwd_speed, prev_fwd_speed, max_accel=3.0, dt=CTRL_DT)
+                        else:
+                            fwd_speed = _rate_limit(fwd_speed, prev_fwd_speed, max_accel=3.0, dt=CTRL_DT)
+
+                        fwd_speed = float(np.clip(fwd_speed, -MAX_FWD, MAX_FWD))
+                        prev_fwd_speed = fwd_speed
+
+                        # ── Translate to NED ───────────────────────────────────────
                         heading = await drone.heading()
                         tgt_hdg = (heading + yaw_adj) % 360.0
 
-                        # body-forward → NED
                         rad = math.radians(heading)
-                        vn = fwd_speed * math.cos(rad)
-                        ve = fwd_speed * math.sin(rad)
+                        vn = fwd_speed * math.cos(rad) - lat_speed * math.sin(rad)
+                        ve = fwd_speed * math.sin(rad) + lat_speed * math.cos(rad)
 
                         # periodic debug
                         now = time.time()
                         if now - last_log_t > LOG_INTERVAL:
                             last_log_t = now
-                            _log(f"FOLLOW  cx={cx} cy={cy} w={w} "
+                            state_label = "AVOID" if avoiding else (collision_state if collision_state != "NORMAL" else "FOLLOW")
+                            _log(f"{state_label}  cx={cx} cy={cy} w={w} area={area:.1f} "
+                                 f"pitch={current_pitch_deg:+.1f} pitch_comp={pitch_comp:+.1f} "
                                  f"err_x={err_x:+.2f} err_d={err_d:+.2f} "
-                                 f"fwd={fwd_speed:+.1f} yaw_adj={yaw_adj:+.1f}")
+                                 f"fwd={fwd_speed:+.1f} lat={lat_speed:+.1f} yaw_adj={yaw_adj:+.1f}")
 
-                        await drone.set_velocity(vn, ve, vert_spd,
-                                                 yaw_deg=tgt_hdg)
+                        await drone.set_velocity(vn, ve, vert_spd, yaw_deg=tgt_hdg)
                 else:
                     # ---- LED lost in this frame ----
                     dt_lost = time.time() - last_det_t
                     heading = await drone.heading()
+                    prev_fwd_speed = 0.0
 
                     if protocol_cmd == "HOLD":
-                        # If we are in hold, just maintain position even if currently lost in the blink cycle
+                        # Maintain position even if currently lost in the blink cycle
                         if state != State.HOLD:
                             _log("Blinking detected (off cycle) → HOLD")
                             state = State.HOLD
                         await drone.set_velocity(0, 0, 0, yaw_deg=heading)
                         last_det_t = time.time() # Reset timeout during HOLD mode
                     else:
+                        # Check obstacle density even if LED is lost
+                        pitch_comp = (current_pitch_deg / 45.0) * FRAME_H
+                        pitch_comp = float(np.clip(pitch_comp, -120.0, 120.0))
+                        obs_density = compute_obstacle_density(frame, led_bbox=None, box_size=160, pitch_comp=pitch_comp)
+                        lat_speed = 0.0
+                        if obs_density > 0.02:
+                            avoid_dir = obstacle_avoid_direction(frame, box_size=160)
+                            lat_speed = 0.6 * avoid_dir
+
                         # periodic debug for lost state
                         now = time.time()
                         if now - last_log_t > LOG_INTERVAL:
                             last_log_t = now
-                            _log(f"LOST  dt={dt_lost:.1f}s  state={state.value}")
+                            lock_label = "WAIT_INITIAL" if not initial_lock else "LOST"
+                            _log(f"{lock_label}  dt={dt_lost:.1f}s  state={state.value} obs_density={obs_density:.3f}")
 
-                        if dt_lost < HOVER_TIMEOUT:
-                            if state != State.SAFE_HOVER:
-                                _log("LED lost → SAFE_HOVER")
-                                state = State.SAFE_HOVER
-                            await drone.set_velocity(0, 0, 0, yaw_deg=heading)
-
-                        elif dt_lost < LAND_TIMEOUT:
-                            if state != State.YAW_SEARCH:
-                                _log("Searching → YAW_SEARCH")
-                                state = State.YAW_SEARCH
-                            search_hdg = (heading
-                                          + last_dir * SEARCH_RATE * CTRL_DT
-                                          ) % 360.0
-                            await drone.set_velocity(0, 0, 0,
-                                                     yaw_deg=search_hdg)
+                        if not initial_lock:
+                            # Startup mode: wait pointing forward in SAFE_HOVER for up to 45 seconds
+                            if dt_lost < 45.0:
+                                if state != State.SAFE_HOVER:
+                                    _log("Waiting for leader's first detection... SAFE_HOVER")
+                                    state = State.SAFE_HOVER
+                                await drone.set_velocity(0, 0, 0, yaw_deg=heading)
+                            else:
+                                _log("Initial connection timeout → LAND")
+                                state = State.LAND
                         else:
-                            _log("Timeout → LAND")
-                            state = State.LAND
+                            # Normal tracking lost mode
+                            if dt_lost < HOVER_TIMEOUT:
+                                if state != State.SAFE_HOVER:
+                                    _log("LED lost → SAFE_HOVER")
+                                    state = State.SAFE_HOVER
+                                # Slide if obstacle is present, otherwise hover in place
+                                if abs(lat_speed) > 0:
+                                    rad = math.radians(heading)
+                                    vn = -lat_speed * math.sin(rad)
+                                    ve = lat_speed * math.cos(rad)
+                                    await drone.set_velocity(vn, ve, 0, yaw_deg=heading)
+                                else:
+                                    await drone.set_velocity(0, 0, 0, yaw_deg=heading)
+
+                            elif dt_lost < LAND_TIMEOUT:
+                                if state != State.YAW_SEARCH:
+                                    _log("Searching → YAW_SEARCH")
+                                    state = State.YAW_SEARCH
+                                search_hdg = (heading
+                                              + last_dir * SEARCH_RATE * CTRL_DT
+                                              ) % 360.0
+                                if abs(lat_speed) > 0:
+                                    rad = math.radians(heading)
+                                    vn = -lat_speed * math.sin(rad)
+                                    ve = lat_speed * math.cos(rad)
+                                    await drone.set_velocity(vn, ve, 0, yaw_deg=search_hdg)
+                                else:
+                                    await drone.set_velocity(0, 0, 0, yaw_deg=search_hdg)
+                            else:
+                                _log("Timeout → LAND")
+                                state = State.LAND
+
 
             await asyncio.sleep(CTRL_DT)
 
@@ -345,6 +552,9 @@ async def follower(drone, drone_id, shutdown):
         pass
     except Exception as exc:
         _log(f"ERROR: {exc}")
+
+    finally:
+        pitch_task.cancel()
 
     # ── LANDING ────────────────────────────────────────────────────
     _log("Landing …")
@@ -378,38 +588,53 @@ async def main():
     signal.signal(signal.SIGINT, _on_sig)
 
     # ── create & connect followers ────────────────────────────────
-    drones = [Drone(drone_id=did) for did in FOLLOWER_IDS]
+    all_drones = [Drone(drone_id=did) for did in FOLLOWER_IDS]
+    connected_drones = []
 
     print("Connecting follower drones …")
-    for d in drones:
+    for d in all_drones:
         try:
             await d.connect()
             print(f"  Drone {d.drone_id}: connected ✓")
+            connected_drones.append(d)
         except Exception as exc:
-            print(f"  Drone {d.drone_id}: FAILED — {exc}")
+            print(f"  Drone {d.drone_id}: FAILED — {exc} (retrying once)")
+            try:
+                await d.connect()
+                print(f"  Drone {d.drone_id}: connected on retry ✓")
+                connected_drones.append(d)
+            except Exception as exc2:
+                print(f"  Drone {d.drone_id}: FAILED permanently — {exc2}")
+
+    if not connected_drones:
+        print("No drones connected successfully. Exiting.")
+        rclpy.shutdown()
+        return
 
     # ── camera-spin thread ────────────────────────────────────────
     cam = threading.Thread(target=_camera_spin,
-                           args=(drones, stop_thread), daemon=True)
+                           args=(connected_drones, stop_thread), daemon=True)
     cam.start()
     await asyncio.sleep(2.0)       # wait for ROS bridges
 
     # ── launch follower coroutines ────────────────────────────────
     tasks = [
         asyncio.create_task(follower(d, d.drone_id, stop_async))
-        for d in drones
+        for d in connected_drones
     ]
-    print(f"Follower missions launched: {FOLLOWER_IDS}")
+    connected_ids = [d.drone_id for d in connected_drones]
+    print(f"Follower missions launched for: {connected_ids}")
 
     await asyncio.gather(*tasks, return_exceptions=True)
 
     # ── cleanup ───────────────────────────────────────────────────
     stop_thread.set()
     cam.join(timeout=5)
-    for d in drones:
+    for d in connected_drones:
         await d.close()
     rclpy.shutdown()
     print("All followers done.")
+
 
 
 if __name__ == "__main__":

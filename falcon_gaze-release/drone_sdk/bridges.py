@@ -2,8 +2,10 @@ import subprocess
 import sys
 from typing import List, Optional
 
+import os
+WORLD_NAME = os.environ.get("WORLD_NAME", "baylands_custom")
+CAMERA_TOPIC = f'/world/{WORLD_NAME}/model/x500_mono_cam_{{}}/link/mono_cam/base_link/sensor/camera_sensor/image'
 
-CAMERA_TOPIC = '/world/baylands_custom/model/x500_mono_cam_{}/link/mono_cam/base_link/sensor/camera_sensor/image'
 LED_TOPIC = '/model/x500_mono_cam_{}/led_cmd'
 
 

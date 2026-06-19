@@ -8,8 +8,10 @@ import numpy as np
 
 from .exceptions import CameraError
 
+import os
+WORLD_NAME = os.environ.get("WORLD_NAME", "baylands_custom")
+CAMERA_TOPIC = f'/world/{WORLD_NAME}/model/x500_mono_cam_{{}}/link/mono_cam/base_link/sensor/camera_sensor/image'
 
-CAMERA_TOPIC = '/world/baylands_custom/model/x500_mono_cam_{}/link/mono_cam/base_link/sensor/camera_sensor/image'
 GZ_CMD = 'gz'
 
 _PIXEL_FORMAT_NAMES = {
