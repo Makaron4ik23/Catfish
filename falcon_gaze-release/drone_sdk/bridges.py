@@ -19,8 +19,7 @@ class BridgeManager:
             return
         topic = CAMERA_TOPIC.format(self._drone_id)
         self._camera_bridge = subprocess.Popen(
-            ['ros2', 'run', 'ros_gz_image', 'image_bridge', topic],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            ['bash', '-c', f'ros2 run ros_gz_image image_bridge {topic}'],
         )
 
     def start_led_bridge(self) -> None:
@@ -30,7 +29,6 @@ class BridgeManager:
         bridge_arg = f"'{topic}@std_msgs/msg/String]gz.msgs.StringMsg'"
         self._led_bridge = subprocess.Popen(
             ['bash', '-c', f'ros2 run ros_gz_bridge parameter_bridge {bridge_arg}'],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
 
     def stop_all(self) -> None:

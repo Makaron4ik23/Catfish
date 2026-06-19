@@ -1,12 +1,22 @@
 import asyncio
 import math
+import os
+import sys
 from mavsdk import System
 from mavsdk.offboard import PositionNedYaw, OffboardError
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+import rclpy
+from drone_sdk import Drone
+
 # --- Configuration Constants ---
-TAKEOFF_ALT_M = 1.0     # Take off exactly 1 meter above the platform
+TARGET_ABS_ALT = 42.0   # Target absolute altitude (MSL) for the entire swarm
 
 async def run():
+    rclpy.init()
+    drone_leds = Drone(drone_id=0)
+    drone_leds.led_on()
+
     drone = System()
     await drone.connect(system_address="udpin://0.0.0.0:14540")
 
@@ -16,12 +26,20 @@ async def run():
             print("Drone discovered!")
             break
 
+    # Get ground absolute altitude to compute relative takeoff altitude
+    ground_abs_alt = None
+    async for pos in drone.telemetry.position():
+        ground_abs_alt = pos.absolute_altitude_m
+        break
+    takeoff_alt_m = TARGET_ABS_ALT - ground_abs_alt
+    print(f"Ground absolute altitude: {ground_abs_alt:.2f}m. Takeoff relative altitude: {takeoff_alt_m:.2f}m")
+
     print("-- Arming")
     await drone.action.arm()
     await asyncio.sleep(5) 
 
-    print(f"-- Taking off to {TAKEOFF_ALT_M}m above platform")
-    await drone.action.set_takeoff_altitude(TAKEOFF_ALT_M)
+    print(f"-- Taking off to {takeoff_alt_m:.2f}m above platform")
+    await drone.action.set_takeoff_altitude(takeoff_alt_m)
     await drone.action.takeoff()
     await asyncio.sleep(10) # Let it reach a completely stable hover
 
@@ -31,15 +49,18 @@ async def run():
     # =========================================================================
     print("-- Capturing baseline orientation...")
     
-    # 1. Grab the current absolute altitude (Z-axis reference)
-    async for position in drone.telemetry.position():
-        hover_absolute_alt = position.relative_altitude_m
-        break # Stop listening after getting the first stable reading
+    # 1. Takeoff target altitude is takeoff_alt_m
+    hover_absolute_alt = takeoff_alt_m
         
-    # 2. Grab the current absolute heading (Yaw reference)
+    # 2. Grab the current absolute heading (Yaw reference) by averaging multiple readings to bypass MAVSDK's stale buffer.
+    hover_yaw_deg = 0.0
+    count = 0
     async for heading in drone.telemetry.heading():
-        hover_yaw_deg = heading.heading_deg  # <-- Fixed attribute name here!
-        break # Stop listening after getting the first stable reading
+        hover_yaw_deg += heading.heading_deg
+        count += 1
+        if count >= 10:
+            break
+    hover_yaw_deg /= count
         
     hover_yaw_rad = math.radians(hover_yaw_deg)
     print(f"Captured Base - Altitude: {hover_absolute_alt:.2f}m, Heading: {hover_yaw_deg:.2f}°")
@@ -73,7 +94,8 @@ async def run():
     # ==========================
 
     # --- Phase 1: Move on path 2 meters ---
-    print("-> Moving forward 2 meters on path")
+    print("-> Moving forward 2 meters on path (LED ON -> FOLLOW)")
+    drone_leds.led_on()
     await drone.offboard.set_position_ned(get_ned_position(2.0, 0.0, 0.0))
     await asyncio.sleep(6)
 
@@ -98,8 +120,16 @@ async def run():
     await drone.offboard.set_position_ned(get_ned_position(2.0, 0.0, 0.0))
     await asyncio.sleep(5)
 
+    print("-> ** HOLD Phase ** (Manual 1Hz BLINK -> HOLD)")
+    for _ in range(10):
+        drone_leds.led_on()
+        await asyncio.sleep(0.5)
+        drone_leds.led_off()
+        await asyncio.sleep(0.5)
+
     # --- Phase 2: Progress down path to +5 meters total ---
-    print("-> Moving forward an additional 3 meters (Total: 5m down path)")
+    print("-> Moving forward an additional 3 meters (Total: 5m down path) (LED ON -> FOLLOW)")
+    drone_leds.led_on()
     await drone.offboard.set_position_ned(get_ned_position(5.0, 0.0, 0.0))
     await asyncio.sleep(6)
 
@@ -135,7 +165,8 @@ async def run():
     except OffboardError as error:
         print(f"Stopping offboard mode failed: {error._result.result}")
 
-    print("-- Landing")
+    print("-- Landing (LED OFF -> FINISH/LOST)")
+    drone_leds.led_off()
     await drone.action.land()
     
 if __name__ == "__main__":
