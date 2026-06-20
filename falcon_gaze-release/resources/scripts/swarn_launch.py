@@ -2,19 +2,15 @@ from launch import LaunchDescription
 from launch.actions import ExecuteProcess, TimerAction
 
 import os
-import math
-
 WORLD_NAME = os.environ.get("WORLD_NAME", "baylands_custom")
+SETUP_SCRIPT = os.path.join(os.path.dirname(__file__), "px4_gz_setup.sh")
 
-# Heading: 0 rad = North (most stable for EKF magnetometer convergence)
-# Drones will rotate to desired heading after takeoff via mission code
+# Heading 0 rad matches PX4 North. In this Baylands world that points along +Y.
 HEADING_RAD = 0.0
-# Direction from leader to behind = heading + pi (south)
-BEHIND_DX = -math.cos(HEADING_RAD)  # -1.0 (south along X)
-BEHIND_DY = -math.sin(HEADING_RAD)  # 0.0
 
 def leader_instanse(x, y, z, yaw=HEADING_RAD):
         cmd = f"""
+            source "{SETUP_SCRIPT}" &&
             cd ~/PX4-Autopilot/ &&
             PX4_SYS_AUTOSTART=4010 \
             PX4_SIM_MODEL=gz_x500_mono_cam \
@@ -29,6 +25,7 @@ def leader_instanse(x, y, z, yaw=HEADING_RAD):
 
 def follower_instanse(i, x, y, z, yaw=HEADING_RAD):
         cmd = f"""
+            source "{SETUP_SCRIPT}" &&
             cd ~/PX4-Autopilot/ &&
             PX4_SYS_AUTOSTART=4010 \
             PX4_SIM_MODEL=gz_x500_mono_cam \
@@ -42,10 +39,21 @@ def follower_instanse(i, x, y, z, yaw=HEADING_RAD):
                 output="screen"
         )
 
-# Leader spawn point
-LEADER_X, LEADER_Y = 125.0, 51.0  # moved downhill from purple elevation
-SPAWN_Z = 1.0       # ground level - flat terrain here
-SPACING = 2.0        # meters between drones (tight to stay on flat ground)
+# Start platform bbox from baylands_start.glb:
+# center=(128.2, 53.5, 1.4), local x/y extent +/-3m.
+PLATFORM_CENTER_X = 128.2
+PLATFORM_CENTER_Y = 53.5
+PLATFORM_TOP_Z = 1.4
+SPAWN_Z = PLATFORM_TOP_Z + 0.35
+
+# Leader is in front, followers spawn behind it in one row on the platform.
+LEADER_X, LEADER_Y = PLATFORM_CENTER_X, PLATFORM_CENTER_Y + 2.0
+FOLLOWER_ROW_Y = PLATFORM_CENTER_Y - 1.4
+FOLLOWER_ROW_XS = {
+        1: PLATFORM_CENTER_X - 2.0,
+        2: PLATFORM_CENTER_X,
+        3: PLATFORM_CENTER_X + 2.0,
+}
 
 def generate_launch_description():
         actions = []
@@ -53,14 +61,12 @@ def generate_launch_description():
         actions.append(
                 leader_instanse(LEADER_X, LEADER_Y, SPAWN_Z)
         )
-        # Followers in single-file chain behind leader (2.5m spacing)
-        followers = []
-        for k in range(1, 4):
-                fx = LEADER_X + BEHIND_DX * SPACING * k
-                fy = LEADER_Y + BEHIND_DY * SPACING * k
-                followers.append((k, round(fx, 3), round(fy, 3), SPAWN_Z))
+        followers = [
+                (idx, round(x, 3), round(FOLLOWER_ROW_Y, 3), SPAWN_Z)
+                for idx, x in FOLLOWER_ROW_XS.items()
+        ]
 
-        # Delay followers so Gazebo is ready (staggered 20s apart)
+        # Delay followers so Gazebo is ready.
         for i, (idx, x, y, z) in enumerate(followers):
                 actions.append(
                         TimerAction(

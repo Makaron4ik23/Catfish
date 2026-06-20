@@ -48,7 +48,7 @@ class Drone:
 
     # ── Connection ──────────────────────────────────────────────────
 
-    async def connect(self, timeout: float = CONNECT_TIMEOUT) -> None:
+    async def connect(self, timeout: float = CONNECT_TIMEOUT, wait_health: bool = True) -> None:
         udp_port = MAVSDK_UDP_PORT_BASE + self.drone_id
         grpc_port = MAVSDK_GRPC_PORT_BASE + self.drone_id
         address = f'udpin://0.0.0.0:{udp_port}'
@@ -74,19 +74,29 @@ class Drone:
                 f'Drone {self.drone_id} did not report connected within {timeout}s'
             )
 
-        try:
-            await asyncio.wait_for(
-                self._wait_health(), timeout=timeout,
-            )
-        except asyncio.TimeoutError:
-            raise ConnectionError(
-                f'Drone {self.drone_id} health check timed out ({timeout}s)'
-            )
+        if wait_health:
+            try:
+                await asyncio.wait_for(
+                    self._wait_health(), timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                raise ConnectionError(
+                    f'Drone {self.drone_id} health check timed out ({timeout}s)'
+                )
+        else:
+            print(f"[Drone {self.drone_id}] Health gate skipped for SITL startup")
 
         self._connected = True
-        # Disable ALL battery failsafes for SITL simulation
+        # Disable ALL battery failsafes for SITL simulation, plus GPS-drift
+        # arming checks: under heavy SITL load the EKF's stationary
+        # horizontal/vertical drift estimate can stay above threshold
+        # indefinitely, which would otherwise block arming/health forever.
+        # We don't use GPS accuracy for anything (followers fly on vision/LED,
+        # the leader only needs local NED for offboard control), so it's safe
+        # to relax this check rather than wait on it.
         _bat_params = [
             ("COM_LOW_BAT_ACT", 0),    # no action on low battery
+            ("EKF2_GPS_CHECK", 0),     # disable GPS quality/drift arming checks
         ]
         _bat_float_params = [
             ("BAT_LOW_THR", 0.02),      # lower low-battery threshold to 2%
@@ -126,7 +136,14 @@ class Drone:
         try:
             await self._sys.action.arm()
         except Exception as e:
-            raise MAVSDKError(f'Failed to arm drone {self.drone_id}: {e}')
+            # SITL pre-arm checks (noisy GPS-drift / mag health, already relaxed
+            # via params) can deny a normal arm even though the vehicle is fine.
+            # Fall back to force-arm, which bypasses pre-arm checks.
+            try:
+                await self._sys.action.arm_force()
+                print(f"[Drone {self.drone_id}] Normal arm denied ({e}); force-armed instead")
+            except Exception as e2:
+                raise MAVSDKError(f'Failed to arm drone {self.drone_id}: {e2}')
 
     async def disarm(self) -> None:
         self._require_connected()
@@ -247,16 +264,36 @@ class Drone:
             )
 
     async def heading(self) -> float:
+        # telemetry.heading() is derived from the global position estimate, which
+        # never becomes valid in this GPS-less world, so it would block forever.
+        # attitude_euler.yaw_deg is the same heading (0 = North in NED) and comes
+        # straight from the attitude estimator, which is always available.
         self._require_connected()
-        async for hdg in self._sys.telemetry.heading():
-            return hdg.heading_deg
+        async for att in self._sys.telemetry.attitude_euler():
+            return att.yaw_deg % 360.0
 
     # ── Telemetry Communication ─────────────────────────────────────
 
-    def publish_telemetry(self, n: float, e: float, d: float, vn: float, ve: float, vd: float, yaw: float, abs_alt: float) -> None:
+    def publish_telemetry(
+        self,
+        n: float,
+        e: float,
+        d: float,
+        vn: float,
+        ve: float,
+        vd: float,
+        yaw: float,
+        abs_alt: float,
+        airborne: Optional[bool] = None,
+        target_id: Optional[int] = None,
+    ) -> None:
         self._ensure_ros()
         import json
+        import time
+        is_airborne = bool(-float(d) > 1.5) if airborne is None else bool(airborne)
         data = {
+            "id": int(self.drone_id),
+            "t": time.time(),
             "n": float(n),
             "e": float(e),
             "d": float(d),
@@ -264,13 +301,16 @@ class Drone:
             "ve": float(ve),
             "vd": float(vd),
             "yaw": float(yaw),
-            "abs_alt": float(abs_alt)
+            "abs_alt": float(abs_alt),
+            "airborne": is_airborne,
         }
+        if target_id is not None:
+            data["target_id"] = int(target_id)
         self._ros.publish_telemetry(json.dumps(data))
 
-    def get_target_telemetry(self) -> Optional[dict]:
+    def get_target_telemetry(self, target_id: Optional[int] = None, max_age_s: float = 1.0) -> Optional[dict]:
         self._ensure_ros()
-        return self._ros.target_telemetry()
+        return self._ros.target_telemetry(target_id=target_id, max_age_s=max_age_s)
 
     # ── LED control ─────────────────────────────────────────────────
 

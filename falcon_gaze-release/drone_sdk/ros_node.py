@@ -1,4 +1,5 @@
 import threading
+import time
 from typing import Optional
 
 import numpy as np
@@ -35,23 +36,36 @@ class DroneROSNode(Node):
         # High-speed telemetry channel setup
         self._telemetry_pub = self.create_publisher(String, f'/drone_{drone_id}/telemetry', 10)
         self._target_telemetry_lock = threading.Lock()
-        self._target_telemetry = None
+        self._target_telemetry_by_id = {}
+        self._default_target_id = drone_id - 1 if drone_id > 0 else None
+        self._telemetry_subs = []
 
-        if drone_id > 0:
-            target_topic = f'/drone_{drone_id-1}/telemetry'
-            self._telemetry_sub = self.create_subscription(
-                String, target_topic, self._telemetry_cb, 10
+        target_ids = []
+        if self._default_target_id is not None:
+            target_ids.append(self._default_target_id)
+        if drone_id > 1:
+            target_ids.append(0)
+        for target_id in sorted(set(target_ids)):
+            target_topic = f'/drone_{target_id}/telemetry'
+            self._telemetry_subs.append(
+                self.create_subscription(
+                    String,
+                    target_topic,
+                    lambda msg, idx=target_id: self._telemetry_cb(idx, msg),
+                    10,
+                )
             )
 
         self._spin_thread: Optional[threading.Thread] = None
         self._spinning = False
 
-    def _telemetry_cb(self, msg: String) -> None:
+    def _telemetry_cb(self, target_id: int, msg: String) -> None:
         try:
             import json
             data = json.loads(msg.data)
+            data["_received_monotonic"] = time.monotonic()
             with self._target_telemetry_lock:
-                self._target_telemetry = data
+                self._target_telemetry_by_id[target_id] = data
         except Exception:
             pass
 
@@ -60,9 +74,18 @@ class DroneROSNode(Node):
         msg.data = value
         self._telemetry_pub.publish(msg)
 
-    def target_telemetry(self) -> Optional[dict]:
+    def target_telemetry(self, target_id: Optional[int] = None, max_age_s: float = 1.0) -> Optional[dict]:
+        selected_id = self._default_target_id if target_id is None else target_id
+        if selected_id is None:
+            return None
         with self._target_telemetry_lock:
-            return self._target_telemetry
+            data = self._target_telemetry_by_id.get(selected_id)
+            if data is None:
+                return None
+            age = time.monotonic() - data.get("_received_monotonic", 0.0)
+            if age > max_age_s:
+                return None
+            return dict(data)
 
     def _image_cb(self, msg: Image) -> None:
         try:

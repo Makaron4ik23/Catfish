@@ -33,6 +33,30 @@ def update_pd_filter(err, prev_err, prev_err_diff, alpha, dt):
     return smoothed_diff
 
 
+def angle_diff_deg(target_deg, current_deg):
+    return (target_deg - current_deg + 540.0) % 360.0 - 180.0
+
+
+def step_heading_towards(current_deg, target_deg, max_step_deg):
+    err = angle_diff_deg(target_deg, current_deg)
+    step = float(np.clip(err, -max_step_deg, max_step_deg))
+    return (current_deg + step) % 360.0
+
+
+def is_tracking_candidate(det):
+    if det is None:
+        return False
+    _cx, _cy, w, h, area = det
+    return area >= 20.0 and w >= 6 and h >= 5
+
+
+def is_initial_lock_candidate(det):
+    if det is None:
+        return False
+    _cx, _cy, w, h, area = det
+    return area >= 45.0 and w >= 8 and h >= 6
+
+
 def is_valid_contour(area, bw, bh, max_aspect, solidity=None):
     MIN_AREA = 8.0
     MAX_ALLOWED_AREA = 950.0
@@ -162,6 +186,27 @@ def test_solidity_filter_small_contours():
     print("test_solidity_filter_small_contours passed ✓")
 
 
+def test_initial_lock_rejects_tiny_blob():
+    tiny_blob = (228, 243, 5, 5, 16.0)
+    normal_led = (253, 236, 15, 10, 91.5)
+
+    assert is_tracking_candidate(tiny_blob) is False
+    assert is_initial_lock_candidate(tiny_blob) is False
+    assert is_tracking_candidate(normal_led) is True
+    assert is_initial_lock_candidate(normal_led) is True
+    print("test_initial_lock_rejects_tiny_blob passed ✓")
+
+
+def test_heading_step_wraparound():
+    assert angle_diff_deg(5.0, 355.0) == 10.0
+    assert angle_diff_deg(355.0, 5.0) == -10.0
+
+    assert step_heading_towards(355.0, 5.0, 3.0) == 358.0
+    assert step_heading_towards(5.0, 355.0, 3.0) == 2.0
+    assert step_heading_towards(10.0, 14.0, 10.0) == 14.0
+    print("test_heading_step_wraparound passed ✓")
+
+
 
 
 def test_obstacle_density_excludes_target_bbox():
@@ -189,6 +234,8 @@ def run_all_tests():
         test_collision_hysteresis,
         test_pd_controller_smoothing,
         test_solidity_filter_small_contours,
+        test_initial_lock_rejects_tiny_blob,
+        test_heading_step_wraparound,
         test_obstacle_density_excludes_target_bbox,
     ]:
         try:
